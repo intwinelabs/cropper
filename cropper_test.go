@@ -86,47 +86,61 @@ func TestCrop(t *testing.T) {
 func TestCropWithFaces(t *testing.T) {
 	assert := assert.New(t)
 
-	file := "tests/prettygirl1.jpg"
-	fi, _ := os.Open(file)
-	defer fi.Close()
-
-	img, _, err := image.Decode(fi)
+	var files []string
+	err := filepath.Walk("tests", func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() && strings.Index(info.Name(), ".jpg") > -1 {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil {
-		assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
+		assert.FailNow(err.Error())
 	}
 
-	rec, err := goface.NewRecognizer("models")
-	if err != nil {
-		assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
-	}
+	for _, file := range files {
 
-	fs, err := rec.RecognizeFile(file, 10)
-	if err != nil {
-		assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
-	}
-	var faces []image.Rectangle
-	for _, face := range fs {
-		faces = append(faces, face.Rectangle)
-	}
+		fi, _ := os.Open(file)
+		defer fi.Close()
 
-	topCrop, err := smartCropWithFaces(img, 1125, 675, faces)
-	if err != nil {
-		t.Fatal(err)
-	}
-	/*expected := image.Rect(464, 24, 719, 279)
-	if topCrop != expected {
-		t.Fatalf("expected %v, got %v", expected, topCrop)
-	}*/
+		img, _, err := image.Decode(fi)
+		if err != nil {
+			assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
+		}
 
-	sub, ok := img.(SubImager)
-	if ok {
-		cropImage := sub.SubImage(topCrop)
-		// cropImage := sub.SubImage(image.Rect(topCrop.X, topCrop.Y, topCrop.Width+topCrop.X, topCrop.Height+topCrop.Y))
-		imgName := strings.Split(fi.Name(), ".jpg")[0] + "_cropped.jpg"
-		logger.Infoln(imgName)
-		writeImage("jpeg", cropImage, imgName)
-	} else {
-		t.Error(errors.New("No SubImage support"))
+		rec, err := goface.NewRecognizer("models")
+		if err != nil {
+			assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
+		}
+
+		fs, err := rec.RecognizeFile(file, 10)
+		if err != nil {
+			assert.FailNowf("error: %s, %s", err.Error(), fi.Name())
+		}
+		var faces []image.Rectangle
+		for _, face := range fs {
+			faces = append(faces, face.Rectangle)
+		}
+
+		//topCrop, err := smartCropWithFaces(img, 1125, 675, faces)
+		topCrop, err := smartCropWithFaces(img, 675, 1125, faces)
+		if err != nil {
+			t.Fatal(err)
+		}
+		/*expected := image.Rect(464, 24, 719, 279)
+		if topCrop != expected {
+			t.Fatalf("expected %v, got %v", expected, topCrop)
+		}*/
+
+		sub, ok := img.(SubImager)
+		if ok {
+			cropImage := sub.SubImage(topCrop)
+			// cropImage := sub.SubImage(image.Rect(topCrop.X, topCrop.Y, topCrop.Width+topCrop.X, topCrop.Height+topCrop.Y))
+			imgName := strings.Split(fi.Name(), ".jpg")[0] + "_cropped.jpg"
+			logger.Infoln(imgName)
+			writeImage("jpeg", cropImage, imgName)
+		} else {
+			t.Error(errors.New("No SubImage support"))
+		}
 	}
 
 }

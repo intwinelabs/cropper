@@ -32,7 +32,7 @@ const (
 	saturationThreshold     = 0.4
 	saturationBias          = 0.2
 	saturationWeight        = 0.3
-	scoreDownSample         = 8 // step * minscale rounded down to the next power of two should be good
+	scoreDownSample         = 8
 	step                    = 8
 	scaleStep               = 0.1
 	minScale                = 0.9
@@ -40,7 +40,7 @@ const (
 	edgeRadius              = 0.4
 	edgeWeight              = -20.0
 	outsideImportance       = -0.5
-	ruleOfThirds            = false
+	ruleOfThirds            = true
 	prescale                = true
 	prescaleMin             = 400.00
 )
@@ -167,7 +167,7 @@ func (a analyzer) FindBestCropWithFaces(img image.Image, width, height int, face
 		a.logger.Infof("scale: %f, cropw: %f, croph: %f, minscale: %f\n", scale, cropWidth, cropHeight, realMinScale)
 	}
 
-	topCrop, err := a.analyzeWithFaces(lowimg, cropWidth, cropHeight, realMinScale, faces)
+	topCrop, err := a.analyzeWithFaces(lowimg, cropWidth, cropHeight, realMinScale, img.Bounds(), faces)
 	if err != nil {
 		return topCrop, err
 	}
@@ -303,7 +303,7 @@ func (a analyzer) analyze(img *image.RGBA, cropWidth, cropHeight, realMinScale f
 	return topCrop.Rectangle, nil
 }
 
-func getFacesMidPoint(faces []image.Rectangle) image.Point {
+func getFacesRect(r image.Rectangle, origRect image.Rectangle, faces []image.Rectangle) image.Rectangle {
 	var minX, minY, maxX, maxY int
 	for idx, face := range faces {
 		if idx == 0 {
@@ -318,22 +318,39 @@ func getFacesMidPoint(faces []image.Rectangle) image.Point {
 			if face.Min.Y < minY {
 				minY = face.Min.Y
 			}
-			if face.Max.X < maxX {
+			if face.Max.X > maxX {
 				maxX = face.Max.X
 			}
-			if face.Max.X < maxX {
+			if face.Max.X > maxX {
 				maxY = face.Max.Y
 			}
 		}
 	}
-	x := (maxX - minX) / 2
-	y := (maxY - minY) / 2
+
+	xMinT := r.Max.X * minX / origRect.Max.X
+	yMinT := r.Max.Y * minY / origRect.Max.Y
+	xMaxT := r.Max.X * maxX / origRect.Max.X
+	yMaxT := r.Max.Y * maxY / origRect.Max.Y
+
+	min := image.Point{X: xMinT, Y: yMinT}
+	max := image.Point{X: xMaxT, Y: yMaxT}
+	return image.Rectangle{Min: min, Max: max}
+}
+
+func centerPoint(r image.Rectangle) image.Point {
+	x := r.Max.X / 2
+	y := r.Max.Y / 2
 	return image.Point{X: x, Y: y}
 }
 
-func (a analyzer) analyzeWithFaces(img *image.RGBA, cropWidth, cropHeight, realMinScale float64, faces []image.Rectangle) (image.Rectangle, error) {
-	o := image.NewRGBA(img.Bounds())
+func distance(p1, p2 image.Point) float64 {
+	first := math.Pow(math.Abs(float64(p2.X-p1.X)), 2)
+	second := math.Pow(math.Abs(float64(p2.Y-p1.Y)), 2)
+	return math.Sqrt(first + second)
+}
 
+func (a analyzer) analyzeWithFaces(img *image.RGBA, cropWidth, cropHeight, realMinScale float64, origRect image.Rectangle, faces []image.Rectangle) (image.Rectangle, error) {
+	o := image.NewRGBA(img.Bounds())
 	now := time.Now()
 	edgeDetect(img, o)
 	if a.debug {
@@ -357,32 +374,47 @@ func (a analyzer) analyzeWithFaces(img *image.RGBA, cropWidth, cropHeight, realM
 
 	now = time.Now()
 	var topCrop Crop
-	topScore := -1.0
+	topScore := -10000.0
 	cs := crops(o, cropWidth, cropHeight, realMinScale)
 	if a.debug {
 		a.logger.Infoln("Time elapsed crops:", time.Since(now), len(cs))
 	}
 
 	now = time.Now()
-	midPoint := getFacesMidPoint(faces)
+	faceRect := getFacesRect(o.Rect, origRect, faces)
+	if a.debug {
+		a.logger.Infof("Faces: %+v", faces)
+		a.logger.Infof("Faces Rect: %+v", faceRect)
+	}
 	for _, crop := range cs {
-		if !midPoint.In(crop.Rectangle) {
-			continue
-		}
 		nowIter := time.Now()
 		crop.Score = score(o, crop)
 		if a.debug {
+			a.logger.Infof("Crop: %+v", crop)
 			a.logger.Infoln("Time elapsed single-score:", time.Since(nowIter))
 		}
-		if crop.totalScore() > topScore {
+		tScore := crop.totalScore()
+		a.logger.Infof("%.6f", tScore)
+		if len(faces) > 0 {
+			if !faceRect.In(crop.Rectangle) {
+				continue
+			}
+		}
+		if tScore > topScore {
 			topCrop = crop
-			topScore = crop.totalScore()
+			topScore = tScore
 		}
 	}
 	if a.debug {
+		a.logger.Infof("Final score: %.6f", topScore)
 		a.logger.Infoln("Time elapsed score:", time.Since(now))
 		drawDebugCrop(topCrop, o)
 		debugOutput(true, o, "final")
+	}
+
+	// check if we failed making a good choice from faces and math
+	if topCrop.Rectangle.Max.X == 0 && topCrop.Rectangle.Max.Y == 0 {
+		return a.analyze(img, cropWidth, cropHeight, realMinScale)
 	}
 
 	return topCrop.Rectangle, nil
